@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0f172a">
+    <title>상호작용형 과학 시뮬레이션 - 빛의 반사</title>
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['"Noto Sans KR"', 'sans-serif'] },
+                    colors: {
+                        laser: '#06b6d4', // cyan-500
+                        laserGlow: 'rgba(6, 182, 212, 0.6)',
+                        darkBg: '#0f172a', // slate-900
+                        glassBg: 'rgba(30, 41, 59, 0.75)',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .btn-press {
+            transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .btn-press:active {
+            transform: scale(0.95);
+        }
+
+        .laser-line {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: drawLaser 1.5s ease-out forwards;
+        }
+        
+        @keyframes drawLaser {
+            to { stroke-dashoffset: 0; }
+        }
+
+        .pulse-target {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .success-glow {
+            box-shadow: 0 0 20px 5px rgba(6, 182, 212, 0.8);
+            transition: box-shadow 0.3s ease;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+            animation: fadeInUp 0.4s ease-out forwards;
+        }
+
+        /* SVG Patterns */
+        .grid-bg {
+            background-image: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        
+        /* Toggle Switch CSS */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #06b6d4;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #06b6d4;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useMemo } = React;
+
+        const GOOGLE_SCRIPT_URL = ""; 
+
+        const QUIZ_QUESTIONS = [
+            { id: 1, q: "평면거울은 빛의 직진 성질이 아닌 '반사' 성질을 이용한 것이다.", a: "O" },
+            { id: 2, q: "빛이 반사될 때 입사각과 반사각의 크기는 항상 같다.", a: "O" },
+            { id: 3, q: "빛이 거울 면에 수직으로 입사하면 입사각은 90°이다.", a: "X" }, // 0도
+            { id: 4, q: "종이와 같이 표면이 매끄럽지 않은 곳에서는 빛의 반사 법칙이 성립하지 않는다.", a: "X" }, // 난반사도 반사법칙 성립
+            { id: 5, q: "거울 면에 들어가는 빛을 입사광선, 튕겨나가는 빛을 반사광선이라고 한다.", a: "O" },
+            { id: 6, q: "법선은 거울 면과 나란한(평행한) 선이다.", a: "X" }, // 수직인 선
+            { id: 7, q: "입사광선과 거울 면이 이루는 각도가 30°이면 반사각은 60°이다.", a: "O" }, // 입사각은 법선과의 각도이므로 90-30=60. 반사각도 60.
+            { id: 8, q: "거울에서 물체까지의 거리와 거울에서 상(비친 모습)까지의 거리는 같다.", a: "O" },
+            { id: 9, q: "입사각이 커지면 반사각의 크기도 함께 커진다.", a: "O" },
+            { id: 10, q: "평면거울에 비친 모습은 실물과 상하좌우가 모두 뒤집혀 보인다.", a: "X" }, // 좌우만
+        ];
+
+        const LEVELS = [
+            // 필수 5단계
+            {
+                id: 1, title: "튜토리얼: 예측하기",
+                desc: "거울을 배치하고 머릿속으로 경로를 그린 뒤 [레이저 발사]를 누르세요.",
+                gridSize: 4, source: { x: 0, y: 3, dir: 'right' }, target: { x: 3, y: 0 },
+                obstacles: [], maxMirrors: 1, checkpoints: []
+            },
+            {
+                id: 2, title: "연속 반사",
+                desc: "거울 2개를 사용하여 파란색 경유지(에너지)를 거쳐 별에 도달하세요.",
+                gridSize: 5, source: { x: 0, y: 0, dir: 'down' }, target: { x: 4, y: 4 },
+                obstacles: [{ x: 0, y: 4 }], maxMirrors: 2, checkpoints: [{ x: 2, y: 2 }, { x: 4, y: 3 }]
+            },
+            {
+                id: 3, title: "우회 기동",
+                desc: "장애물을 피해가려면 4번 꺾어야 합니다. 모든 에너지를 통과하세요.",
+                gridSize: 5, source: { x: 0, y: 2, dir: 'right' }, target: { x: 4, y: 2 },
+                obstacles: [{ x: 2, y: 1 }, { x: 2, y: 2 }, { x: 2, y: 3 }],
+                maxMirrors: 4, checkpoints: [{ x: 1, y: 1 }, { x: 3, y: 1 }]
+            },
+            {
+                id: 4, title: "U턴 반사",
+                desc: "빛을 180도 뒤로 보내려면 거울 2개가 필요합니다.",
+                gridSize: 6, source: { x: 1, y: 0, dir: 'down' }, target: { x: 4, y: 0 },
+                obstacles: [{ x: 2, y: 0 }, { x: 2, y: 1 }, { x: 3, y: 0 }, { x: 3, y: 1 }],
+                maxMirrors: 2, checkpoints: [{ x: 2, y: 3 }, { x: 3, y: 3 }]
+            },
+            {
+                id: 5, title: "지그재그 골목길",
+                desc: "필수 과정의 마지막 관문입니다. 딱 4개의 거울만 사용할 수 있습니다.",
+                gridSize: 6, source: { x: 0, y: 5, dir: 'right' }, target: { x: 5, y: 0 },
+                obstacles: [{ x: 1, y: 1 }, { x: 4, y: 4 }],
+                maxMirrors: 4, checkpoints: [{ x: 1, y: 3 }, { x: 4, y: 1 }]
+            },
+            // 심화 5단계 (Master)
+            {
+                id: 6, title: "[마스터] 바늘구멍 통과하기",
+                desc: "단 하나의 틈새를 찾아 빛을 쏘세요. (거울 4개 제한)",
+                gridSize: 7, source: { x: 0, y: 3, dir: 'right' }, target: { x: 6, y: 3 },
+                obstacles: [{ x: 3, y: 0 }, { x: 3, y: 2 }, { x: 3, y: 3 }, { x: 3, y: 4 }, { x: 3, y: 6 }],
+                maxMirrors: 4, checkpoints: [{ x: 3, y: 1 }]
+            },
+            {
+                id: 7, title: "[마스터] 사방팔방",
+                desc: "별에 접근하려면 정밀한 경로 설계가 필요합니다.",
+                gridSize: 7, source: { x: 0, y: 0, dir: 'right' }, target: { x: 3, y: 3 },
+                obstacles: [{ x: 2, y: 3 }, { x: 4, y: 3 }, { x: 3, y: 4 }, { x: 2, y: 2 }, { x: 4, y: 2 }],
+                maxMirrors: 5, checkpoints: [{ x: 1, y: 1 }, { x: 5, y: 1 }, { x: 5, y: 5 }, { x: 1, y: 5 }]
+            },
+            {
+                id: 8, title: "[마스터] 지뢰밭",
+                desc: "장애물을 요리조리 피해보세요.",
+                gridSize: 8, source: { x: 0, y: 7, dir: 'right' }, target: { x: 7, y: 0 },
+                obstacles: [{ x: 1, y: 5 }, { x: 2, y: 4 }, { x: 3, y: 3 }, { x: 4, y: 2 }, { x: 5, y: 1 }],
+                maxMirrors: 6, checkpoints: [{ x: 1, y: 6 }, { x: 6, y: 1 }]
+            },
+            {
+                id: 9, title: "[마스터] 뱀의 길",
+                desc: "뱀처럼 꼬불꼬불한 경로를 만들어야 합니다. (거울 6개 제한)",
+                gridSize: 8, source: { x: 0, y: 0, dir: 'down' }, target: { x: 7, y: 7 },
+                obstacles: [{x: 0, y: 7}, {x: 3, y: 6}, {x: 5, y: 2}, {x: 2, y: 1}, {x: 4, y: 0}, {x: 7, y: 6}],
+                maxMirrors: 6, checkpoints: [{x: 1, y: 6}, {x: 2, y: 4}, {x: 3, y: 2}, {x: 4, y: 5}, {x: 6, y: 7}]
+            },
+            {
+                id: 10, title: "[마스터] 궁극의 반사",
+                desc: "모든 경유지를 통과하여 진정한 마스터가 되세요! (거울 8개 제한)",
+                gridSize: 8, source: { x: 0, y: 4, dir: 'right' }, target: { x: 7, y: 3 },
+                obstacles: [{x: 2, y: 4}, {x: 1, y: 5}, {x: 4, y: 2}, {x: 3, y: 7}, {x: 2, y: 7}, {x: 6, y: 2}],
+                maxMirrors: 8, checkpoints: [{x: 1, y: 2}, {x: 4, y: 0}, {x: 6, y: 5}, {x: 5, y: 7}, {x: 4, y: 4}, {x: 5, y: 3}]
+            }
+        ];
+
+        // =====================================================================
+        // UI 컴포넌트: 아이콘
+        // =====================================================================
+        const Icons = {
+            Laser: ({ dir }) => {
+                const rotation = { 'right': '0', 'down': '90', 'left': '180', 'up': '-90' }[dir] || '0';
+                return (
+                    <svg viewBox="0 0 24 24" className="w-full h-full text-cyan-400 drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" style={{ transform: `rotate(${rotation}deg)` }}>
+                        {/* 발사기 본체 */}
+                        <rect x="2" y="6" width="10" height="12" rx="3" fill="#0f172a" stroke="currentColor" strokeWidth="2"/>
+                        <rect x="12" y="9" width="4" height="6" fill="currentColor" />
+                        {/* 방향 지시 화살표 (깜빡임 효과) */}
+                        <path d="M18 12 L22 12 M20 9 L23 12 L20 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.6" className="animate-pulse" />
+                    </svg>
+                );
+            },
+            Target: () => <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.8)] pulse-target"><path fillRule="evenodd" d="M10.788 3.21c.448-1.077 1.976-1.077 2.424 0l2.082 5.007 5.404.433c1.164.093 1.636 1.545.749 2.305l-4.117 3.527 1.257 5.273c.271 1.136-.964 2.033-1.96 1.425L12 18.354 7.373 21.18c-.996.608-2.231-.29-1.96-1.425l1.257-5.273-4.117-3.527c-.887-.76-.415-2.212.749-2.305l5.404-.433 2.082-5.006z" clipRule="evenodd" /></svg>,
+            Obstacle: () => <svg viewBox="0 0 24 24" fill="currentColor" className="w-full h-full text-slate-500"><path fillRule="evenodd" d="M3 6a3 3 0 013-3h12a3 3 0 013 3v12a3 3 0 01-3 3H6a3 3 0 01-3-3V6zm14.25 6a1.5 1.5 0 00-1.5-1.5h-7.5a1.5 1.5 0 00-1.5 1.5v3a1.5 1.5 0 001.5 1.5h7.5a1.5 1.5 0 001.5-1.5v-3z" clipRule="evenodd" /></svg>,
+            Checkpoint: ({ hit }) => <svg viewBox="0 0 24 24" fill="currentColor" className={`w-1/2 h-1/2 ${hit ? 'text-cyan-300 drop-shadow-[0_0_8px_rgba(103,232,249,1)] scale-125' : 'text-blue-500/40'} transition-all duration-300`}><circle cx="12" cy="12" r="8" /></svg>,
+            MirrorSlash: () => <svg viewBox="0 0 100 100" className="w-full h-full"><line x1="10" y1="90" x2="90" y2="10" stroke="#94a3b8" strokeWidth="8" strokeLinecap="round"/><line x1="25" y1="95" x2="95" y2="25" stroke="rgba(255,255,255,0.2)" strokeWidth="4" strokeLinecap="round"/></svg>,
+            MirrorBackslash: () => <svg viewBox="0 0 100 100" className="w-full h-full"><line x1="10" y1="10" x2="90" y2="90" stroke="#94a3b8" strokeWidth="8" strokeLinecap="round"/><line x1="5" y1="25" x2="75" y2="95" stroke="rgba(255,255,255,0.2)" strokeWidth="4" strokeLinecap="round"/></svg>
+        };
+
+        // =====================================================================
+        // 메인 앱 컴포넌트
+        // =====================================================================
+        const App = () => {
+            const [view, setView] = useState('intro'); // 'intro', 'simulation', 'report'
+            const [currentLevelIdx, setCurrentLevelIdx] = useState(0);
+            const [mirrors, setMirrors] = useState({}); // { "x,y": "slash" | "backslash" }
+            
+            // 새롭게 추가된 상태 (레이저 발사 및 시각화)
+            const [isFired, setIsFired] = useState(false);
+            const [showAngles, setShowAngles] = useState(false);
+            
+            const [pathData, setPathData] = useState({ path: [], hitTarget: false, hitCheckpoints: new Set(), failReason: null });
+            
+            // 학생 정보 및 리포트
+            const [studentId, setStudentId] = useState('');
+            const [studentName, setStudentName] = useState('');
+            const [insight, setInsight] = useState('');
+            const [quizSubset, setQuizSubset] = useState([]);
+            const [answers, setAnswers] = useState({});
+            
+            // 모달 및 진행도 관리
+            const [alertModal, setAlertModal] = useState({ show: false, msg: '' });
+            const [teacherModal, setTeacherModal] = useState(false);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [highestCleared, setHighestCleared] = useState(0);
+
+            const level = LEVELS[currentLevelIdx];
+
+            useEffect(() => {
+                const shuffled = [...QUIZ_QUESTIONS].sort(() => 0.5 - Math.random());
+                setQuizSubset(shuffled.slice(0, 3));
+            }, []);
+
+            // 레이저 경로 계산 (항상 내부적으로 계산하지만 화면 표시는 isFired 상태에 따름)
+            useEffect(() => {
+                if (view !== 'simulation') return;
+
+                let x = level.source.x;
+                let y = level.source.y;
+                let dir = level.source.dir;
+                let calculatedPath = [{ x, y }];
+                let hitTarget = false;
+                let failReason = null;
+                let steps = 0;
+                let hitCheckpoints = new Set();
+
+                while (steps < 100) {
+                    if (dir === 'right') x++;
+                    else if (dir === 'left') x--;
+                    else if (dir === 'up') y--;
+                    else if (dir === 'down') y++;
+
+                    // 1. 화면 밖으로 나감 (실패)
+                    if (x < 0 || x >= level.gridSize || y < 0 || y >= level.gridSize) {
+                        calculatedPath.push({ x, y });
+                        failReason = "빛이 우주 밖으로 사라졌습니다!";
+                        break;
+                    }
+
+                    calculatedPath.push({ x, y });
+
+                    if (level.checkpoints?.some(cp => cp.x === x && cp.y === y)) {
+                        hitCheckpoints.add(`${x},${y}`);
+                    }
+
+                    // 2. 목표 도달 확인
+                    if (x === level.target.x && y === level.target.y) {
+                        const requiredCp = level.checkpoints ? level.checkpoints.length : 0;
+                        if (hitCheckpoints.size === requiredCp) {
+                            hitTarget = true;
+                        } else {
+                            failReason = "모든 파란색 경유지를 통과하지 않았습니다!";
+                        }
+                        break;
+                    }
+
+                    // 3. 장애물 충돌 확인 (실패)
+                    if (level.obstacles.some(ob => ob.x === x && ob.y === y)) {
+                        failReason = "장애물에 빛이 흡수되었습니다!";
+                        break;
+                    }
+
+                    // 4. 거울 반사
+                    const mirrorKey = `${x},${y}`;
+                    if (mirrors[mirrorKey]) {
+                        const m = mirrors[mirrorKey];
+                        if (m === 'slash') {
+                            if (dir === 'right') dir = 'up';
+                            else if (dir === 'left') dir = 'down';
+                            else if (dir === 'up') dir = 'right';
+                            else if (dir === 'down') dir = 'left';
+                        }
+                        else if (m === 'backslash') {
+                            if (dir === 'right') dir = 'down';
+                            else if (dir === 'left') dir = 'up';
+                            else if (dir === 'up') dir = 'left';
+                            else if (dir === 'down') dir = 'right';
+                        }
+                    }
+                    steps++;
+                }
+
+                setPathData({ path: calculatedPath, hitTarget, hitCheckpoints, failReason });
+                
+                if (hitTarget && isFired && currentLevelIdx + 1 > highestCleared) {
+                    setHighestCleared(currentLevelIdx + 1);
+                }
+            }, [mirrors, level, view, isFired]); // isFired가 바뀔 때 최고기록 업데이트를 위해 의존성 추가
+
+            // 셀 클릭 (거울 배치) - 클릭 시 발사 상태 초기화
+            const handleCellClick = (x, y) => {
+                if (isFired) setIsFired(false); // 거울을 만지면 빛이 꺼지고 다시 생각하게 만듦
+
+                if (x === level.source.x && y === level.source.y) return;
+                if (x === level.target.x && y === level.target.y) return;
+                if (level.obstacles.some(ob => ob.x === x && ob.y === y)) return;
+                if (level.checkpoints?.some(cp => cp.x === x && cp.y === y)) return;
+
+                const key = `${x},${y}`;
+                const current = mirrors[key];
+                const mirrorCount = Object.keys(mirrors).length;
+                
+                setMirrors(prev => {
+                    const newMirrors = { ...prev };
+                    if (!current) {
+                        if (mirrorCount >= level.maxMirrors) return prev; 
+                        newMirrors[key] = 'slash';
+                    }
+                    else if (current === 'slash') newMirrors[key] = 'backslash';
+                    else delete newMirrors[key];
+                    return newMirrors;
+                });
+            };
+
+            const handleNextLevel = () => {
+                if (currentLevelIdx < LEVELS.length - 1) {
+                    setCurrentLevelIdx(prev => prev + 1);
+                    setMirrors({});
+                    setIsFired(false); // 레벨 넘어가면 초기화
+                } else {
+                    setView('report');
+                }
+            };
+
+            const showAlert = (msg) => setAlertModal({ show: true, msg });
+
+            const handleSubmit = async () => {
+                if (!studentId || !studentName || !insight) {
+                    showAlert("학번, 이름, 알게된 점을 모두 입력해주세요!");
+                    return;
+                }
+                if (Object.keys(answers).length < 3) {
+                    showAlert("OX 퀴즈 3문제를 모두 풀어주세요!");
+                    return;
+                }
+
+                let score = 0;
+                quizSubset.forEach(q => {
+                    if (answers[q.id] === q.a) score++;
+                });
+
+                const payload = {
+                    studentId,
+                    studentName,
+                    quizScore: `${score} / 3`,
+                    insight,
+                    results: `Level ${highestCleared} 까지 해결`
+                };
+
+                if (!GOOGLE_SCRIPT_URL) {
+                    showAlert(`[테스트 모드] 구글 연동 URL이 없습니다.\n\n제출될 데이터:\n학번: ${studentId}\n이름: ${studentName}\n점수: ${score}/3\n알게된점: ${insight}`);
+                    return;
+                }
+
+                setIsSubmitting(true);
+                try {
+                    await fetch(GOOGLE_SCRIPT_URL, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    showAlert("결과가 성공적으로 제출되었습니다. 선생님께 확인받으세요!");
+                    setStudentId(''); setStudentName(''); setInsight('');
+                } catch (err) {
+                    showAlert("제출 중 오류가 발생했습니다. 네트워크 상태를 확인하세요.");
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+
+            const renderIntro = () => (
+                <div className="flex flex-col items-center justify-center min-h-screen p-6 text-center">
+                    <div className="glass-panel p-8 rounded-2xl max-w-lg w-full relative">
+                        <div className="absolute -top-12 -left-12 w-32 h-32 bg-cyan-500 rounded-full mix-blend-screen filter blur-3xl opacity-20"></div>
+                        <h1 className="text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 tracking-tight">
+                            빛의 반사 거울 퍼즐
+                        </h1>
+                        <p className="text-slate-300 mb-8 font-light">Law of Reflection Simulation</p>
+                        
+                        <div className="text-left space-y-4 mb-8 text-slate-200">
+                            <p>🌟 <strong>실험 목표:</strong> 평면거울의 반사 법칙(입사각=반사각)을 이용해 빛의 경로를 설계해 봅시다.</p>
+                            <p>🔍 <strong>진행 방법:</strong> <br/>거울을 배치하여 경로를 <strong className="text-yellow-400">머릿속으로 예상</strong>한 뒤, <strong>[레이저 발사]</strong> 버튼을 눌러 빛이 목표(별)에 닿는지 확인하세요!</p>
+                            <div className="bg-slate-800 p-4 rounded-lg flex justify-around text-sm border border-slate-700">
+                                <div className="flex flex-col items-center">
+                                    <div className="w-10 h-10 mb-2 bg-slate-700 rounded p-1"><Icons.MirrorSlash /></div>
+                                    <span>터치 1번 (/)</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                    <div className="w-10 h-10 mb-2 bg-slate-700 rounded p-1"><Icons.MirrorBackslash /></div>
+                                    <span>터치 2번 (\)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button 
+                            onClick={() => {setView('simulation'); setIsFired(false); setShowAngles(false);}}
+                            className="btn-press w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.5)] text-lg"
+                        >
+                            실험 시작하기
+                        </button>
+                    </div>
+                </div>
+            );
+
+            const renderSimulation = () => {
+                const cellPct = 100 / level.gridSize;
+                
+                const points = pathData.path.map(p => `${(p.x + 0.5) * cellPct},${(p.y + 0.5) * cellPct}`).join(' ');
+                const lastPoint = pathData.path[pathData.path.length - 1];
+
+                return (
+                    <div className="flex flex-col min-h-screen p-4 max-w-2xl mx-auto">
+                        <header className="flex justify-between items-end mb-4 mt-4">
+                            <div>
+                                <div className={`font-bold text-sm tracking-widest ${level.id > 5 ? 'text-yellow-400' : 'text-cyan-400'}`}>
+                                    {level.id > 5 ? `MASTER LEVEL ${level.id}` : `LEVEL ${level.id}`}
+                                </div>
+                                <h2 className="text-2xl font-bold">{level.title}</h2>
+                            </div>
+                            
+                            {/* 법선 및 각도 표시 토글 */}
+                            <div className="flex items-center">
+                                <span className="mr-2 text-xs font-bold text-slate-300">📐 법선/각도 보기</span>
+                                <div className="relative inline-block w-12 h-6 align-middle select-none transition duration-200 ease-in">
+                                    <input type="checkbox" name="toggle" id="toggle" checked={showAngles} onChange={() => setShowAngles(!showAngles)} className="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer border-slate-600"/>
+                                    <label htmlFor="toggle" className="toggle-label block overflow-hidden h-6 rounded-full bg-slate-600 cursor-pointer"></label>
+                                </div>
+                            </div>
+                        </header>
+
+                        <div className="flex justify-between items-center mb-4">
+                            <p className="text-slate-300 text-sm flex-1 mr-4">{level.desc}</p>
+                            <div className="flex gap-2">
+                                <div className={`px-3 py-2 rounded-lg text-xs font-bold border ${Object.keys(mirrors).length >= level.maxMirrors ? 'bg-red-500/20 text-red-400 border-red-500/50' : 'bg-slate-800 text-cyan-400 border-cyan-500/50'}`}>
+                                    거울: {Object.keys(mirrors).length} / {level.maxMirrors}
+                                </div>
+                                <button onClick={() => {setMirrors({}); setIsFired(false);}} className="btn-press px-3 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs border border-slate-700">
+                                    초기화
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 그리드 퍼즐 영역 */}
+                        <div className={`relative w-full aspect-square glass-panel rounded-xl overflow-hidden ${(isFired && pathData.hitTarget) ? 'success-glow' : ''}`}>
+                            <div 
+                                className="absolute inset-0 grid"
+                                style={{ gridTemplateColumns: `repeat(${level.gridSize}, 1fr)`, gridTemplateRows: `repeat(${level.gridSize}, 1fr)` }}
+                            >
+                                {Array.from({ length: level.gridSize * level.gridSize }).map((_, i) => {
+                                    const x = i % level.gridSize;
+                                    const y = Math.floor(i / level.gridSize);
+                                    
+                                    const isSource = x === level.source.x && y === level.source.y;
+                                    const isTarget = x === level.target.x && y === level.target.y;
+                                    const isObstacle = level.obstacles.some(ob => ob.x === x && ob.y === y);
+                                    const isCheckpoint = level.checkpoints?.some(cp => cp.x === x && cp.y === y);
+                                    const hitCp = pathData.hitCheckpoints?.has(`${x},${y}`);
+                                    const mirror = mirrors[`${x},${y}`];
+
+                                    return (
+                                        <div 
+                                            key={i} 
+                                            onClick={() => handleCellClick(x, y)}
+                                            className={`border border-slate-700/50 flex items-center justify-center p-2 relative
+                                                ${(!isSource && !isTarget && !isObstacle && !isCheckpoint) ? 'cursor-pointer hover:bg-white/5 active:bg-white/10' : ''}`}
+                                        >
+                                            {isSource && <div className="w-3/4 h-3/4"><Icons.Laser dir={level.source.dir} /></div>}
+                                            {isTarget && <div className="w-3/4 h-3/4"><Icons.Target /></div>}
+                                            {isObstacle && <div className="w-3/4 h-3/4"><Icons.Obstacle /></div>}
+                                            {isCheckpoint && <Icons.Checkpoint hit={isFired && hitCp} />}
+                                            {mirror === 'slash' && <Icons.MirrorSlash />}
+                                            {mirror === 'backslash' && <Icons.MirrorBackslash />}
+                                            
+                                            {/* 실패 이펙트 표시 */}
+                                            {isFired && !pathData.hitTarget && lastPoint && lastPoint.x === x && lastPoint.y === y && (
+                                                <div className="absolute inset-0 bg-red-500/40 rounded-lg animate-ping"></div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* 레이저 오버레이 (발사 버튼을 누른 경우에만 표시) */}
+                            {isFired && (
+                                <svg className="absolute inset-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 100" preserveAspectRatio="none">
+                                    <polyline points={points} fill="none" stroke="rgba(6, 182, 212, 0.4)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                    <polyline points={points} fill="none" stroke="#fff" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="laser-line" />
+                                    
+                                    {/* 법선 및 입사각/반사각 시각화 */}
+                                    {showAngles && pathData.path.map((p, idx) => {
+                                        const mirror = mirrors[`${p.x},${p.y}`];
+                                        // 빛이 통과한 경로 중 거울이 있는 곳에만 표시 (끝점 제외)
+                                        if (!mirror || idx === 0 || (idx === pathData.path.length - 1 && !pathData.hitTarget)) return null;
+
+                                        const cx = (p.x + 0.5) * cellPct;
+                                        const cy = (p.y + 0.5) * cellPct;
+                                        
+                                        // 법선 (점선) 및 45도 텍스트 렌더링
+                                        if (mirror === 'slash') { // / 거울
+                                            return (
+                                                <g key={`angle-${idx}`} className="animate-fade-in-up">
+                                                    <line x1={(p.x + 0.1)*cellPct} y1={(p.y + 0.1)*cellPct} x2={(p.x + 0.9)*cellPct} y2={(p.y + 0.9)*cellPct} stroke="#fbbf24" strokeWidth="0.5" strokeDasharray="1,1" />
+                                                    <text x={cx - 1.5} y={cy - 2} fill="#fbbf24" fontSize="2.5" textAnchor="middle" transform={`rotate(-45, ${cx}, ${cy})`}>45°</text>
+                                                    <text x={cx + 1.5} y={cy + 4} fill="#fbbf24" fontSize="2.5" textAnchor="middle" transform={`rotate(-45, ${cx}, ${cy})`}>45°</text>
+                                                </g>
+                                            );
+                                        } else if (mirror === 'backslash') { // \ 거울
+                                            return (
+                                                <g key={`angle-${idx}`} className="animate-fade-in-up">
+                                                    <line x1={(p.x + 0.9)*cellPct} y1={(p.y + 0.1)*cellPct} x2={(p.x + 0.1)*cellPct} y2={(p.y + 0.9)*cellPct} stroke="#fbbf24" strokeWidth="0.5" strokeDasharray="1,1" />
+                                                    <text x={cx - 1.5} y={cy + 4} fill="#fbbf24" fontSize="2.5" textAnchor="middle" transform={`rotate(45, ${cx}, ${cy})`}>45°</text>
+                                                    <text x={cx + 1.5} y={cy - 2} fill="#fbbf24" fontSize="2.5" textAnchor="middle" transform={`rotate(45, ${cx}, ${cy})`}>45°</text>
+                                                </g>
+                                            );
+                                        }
+                                        return null;
+                                    })}
+                                </svg>
+                            )}
+                        </div>
+
+                        {/* 하단 컨트롤 및 피드백 영역 */}
+                        <div className="mt-6 min-h-[120px]">
+                            {!isFired ? (
+                                <button 
+                                    onClick={() => setIsFired(true)}
+                                    className="btn-press w-full py-5 bg-gradient-to-r from-red-500 to-pink-600 text-white font-black rounded-xl shadow-[0_0_20px_rgba(225,29,72,0.6)] text-xl tracking-wider"
+                                >
+                                    🚀 레이저 발사! (경로 예측 완료)
+                                </button>
+                            ) : (
+                                <div className="animate-fade-in-up flex flex-col gap-3">
+                                    {pathData.hitTarget ? (
+                                        <>
+                                            <div className="text-center text-cyan-400 font-bold mb-2">🎉 정확합니다! 반사 법칙을 완벽히 이해했군요!</div>
+                                            {currentLevelIdx === 4 ? (
+                                                <div className="bg-slate-800/80 p-4 rounded-2xl border border-yellow-500/50 text-center">
+                                                    <p className="text-slate-300 mb-4 text-sm">필수 단계를 모두 수료했습니다.<br/>보고서를 쓰거나 마스터 모드에 도전하세요!</p>
+                                                    <div className="flex gap-3">
+                                                        <button onClick={() => setView('report')} className="flex-1 btn-press py-3 bg-slate-700 text-white font-bold rounded-xl border border-slate-600">보고서 제출</button>
+                                                        <button onClick={handleNextLevel} className="flex-1 btn-press py-3 bg-yellow-500 text-slate-900 font-bold rounded-xl">마스터 도전</button>
+                                                    </div>
+                                                </div>
+                                            ) : currentLevelIdx === LEVELS.length - 1 ? (
+                                                <button onClick={() => setView('report')} className="btn-press w-full py-4 bg-yellow-500 text-slate-900 font-bold rounded-xl text-lg animate-bounce">👑 마스터 클리어! 보고서 작성</button>
+                                            ) : (
+                                                <button onClick={handleNextLevel} className="btn-press w-full py-4 bg-cyan-500 text-slate-900 font-bold rounded-xl text-lg animate-bounce">다음 레벨로 이동</button>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <div className="text-center p-4 bg-red-900/30 border border-red-500/50 rounded-xl">
+                                            <div className="text-red-400 font-bold mb-2">❌ 경로 설계 실패</div>
+                                            <p className="text-slate-300 text-sm mb-4">{pathData.failReason}</p>
+                                            <button onClick={() => setIsFired(false)} className="btn-press px-6 py-2 bg-slate-700 text-white font-bold rounded-lg hover:bg-slate-600">다시 배치하기</button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderReport = () => (
+                <div className="flex flex-col items-center justify-start min-h-screen p-6 max-w-2xl mx-auto pb-20">
+                    <h2 className="text-3xl font-bold mb-6 mt-4 text-cyan-400">실험 결과 보고서</h2>
+                    
+                    <div className="w-full glass-panel rounded-2xl p-6 mb-6">
+                        <h3 className="text-xl font-bold mb-4 text-white border-b border-slate-700 pb-2">개념 확인 퀴즈</h3>
+                        <div className="space-y-6">
+                            {quizSubset.map((q, idx) => (
+                                <div key={q.id} className="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                                    <p className="mb-3 text-slate-200"><span className="font-bold text-cyan-400 mr-2">Q{idx+1}.</span>{q.q}</p>
+                                    <div className="flex gap-4">
+                                        <button onClick={() => setAnswers(prev => ({...prev, [q.id]: 'O'}))} className={`flex-1 py-2 rounded-lg font-bold text-lg border transition-colors ${answers[q.id] === 'O' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-800 border-slate-600 text-slate-400'}`}>O</button>
+                                        <button onClick={() => setAnswers(prev => ({...prev, [q.id]: 'X'}))} className={`flex-1 py-2 rounded-lg font-bold text-lg border transition-colors ${answers[q.id] === 'X' ? 'bg-red-600 border-red-500 text-white' : 'bg-slate-800 border-slate-600 text-slate-400'}`}>X</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="w-full glass-panel rounded-2xl p-6 mb-6">
+                        <h3 className="text-xl font-bold mb-4 text-white border-b border-slate-700 pb-2">학생 정보 및 알게된 점</h3>
+                        <div className="space-y-4">
+                            <div className="flex gap-4">
+                                <div className="flex-1"><label className="block text-sm text-slate-400 mb-1">학번</label><input type="number" value={studentId} onChange={e => setStudentId(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-white focus:border-cyan-500" placeholder="예: 2101" /></div>
+                                <div className="flex-1"><label className="block text-sm text-slate-400 mb-1">이름</label><input type="text" value={studentName} onChange={e => setStudentName(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-white focus:border-cyan-500" placeholder="이름 입력" /></div>
+                            </div>
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-1">실험을 통해 알게 된 점 (입사각, 반사각, 법선 등 포함)</label>
+                                <textarea value={insight} onChange={e => setInsight(e.target.value)} rows="3" className="w-full bg-slate-800 border border-slate-600 rounded-lg p-3 text-white focus:border-cyan-500 resize-none" placeholder="거울을 놓았을 때 빛이 꺾이는 이유를 반사 법칙을 사용하여 적어보세요."></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onClick={handleSubmit} disabled={isSubmitting} className={`btn-press w-full py-4 font-bold rounded-xl shadow-lg text-lg flex justify-center items-center ${isSubmitting ? 'bg-slate-600 text-slate-400' : 'bg-cyan-500 text-slate-900'}`}>
+                        {isSubmitting ? <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : '결과 제출하기'}
+                    </button>
+                </div>
+            );
+
+            return (
+                <div className="grid-bg min-h-screen relative text-slate-50 selection:bg-cyan-500/30">
+                    <div className="absolute top-4 right-4 z-10 flex gap-2">
+                        {view !== 'intro' && (
+                            <button onClick={() => {setView('intro'); setMirrors({}); setCurrentLevelIdx(0); setIsFired(false);}} className="bg-slate-800/80 p-2 rounded-full border border-slate-600 text-slate-300 hover:text-white"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg></button>
+                        )}
+                        <button onClick={() => setTeacherModal(true)} className="bg-slate-800/80 p-2 rounded-full border border-slate-600 text-slate-300 hover:text-white flex items-center justify-center">⚙️</button>
+                    </div>
+
+                    {view === 'intro' && renderIntro()}
+                    {view === 'simulation' && renderSimulation()}
+                    {view === 'report' && renderReport()}
+
+                    {alertModal.show && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                            <div className="bg-slate-800 border border-slate-600 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                                <h3 className="text-xl font-bold mb-4 text-cyan-400">알림</h3>
+                                <p className="text-slate-300 mb-6 whitespace-pre-wrap">{alertModal.msg}</p>
+                                <button onClick={() => setAlertModal({show: false, msg: ''})} className="w-full py-3 bg-cyan-600 text-white rounded-xl font-bold btn-press">확인</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {teacherModal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+                            <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+                                <div className="p-6 border-b border-slate-800 flex justify-between items-center sticky top-0 bg-slate-900/95 z-10">
+                                    <h2 className="text-2xl font-bold text-cyan-400">⚙️ 교사용 구글 시트 연동 가이드</h2>
+                                    <button onClick={() => setTeacherModal(false)} className="text-slate-400 hover:text-white p-2">✕</button>
+                                </div>
+                                <div className="p-6 space-y-4 text-slate-300 text-sm">
+                                    <p>학생들의 데이터가 구글 시트로 자동 수집됩니다.</p>
+                                    <div className="relative mt-4">
+                                        <pre className="bg-slate-950 p-4 rounded-xl overflow-x-auto border border-slate-800 text-cyan-300 text-xs font-mono">
+{`function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    if (sheet.getLastRow() === 0) sheet.appendRow(['시간', '학번', '이름', '퀴즈점수', '알게된점', '결과']);
+    var data = JSON.parse(e.postData.contents);
+    sheet.appendRow([new Date(), data.studentId, data.studentName, data.quizScore, data.insight, data.results]);
+    return ContentService.createTextOutput(JSON.stringify({"result":"success"})).setMimeType(ContentService.MimeType.JSON);
+  } catch(error) {
+    return ContentService.createTextOutput(JSON.stringify({"result":"error", "error": error.message})).setMimeType(ContentService.MimeType.JSON);
+  }
+}`}
+                                        </pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
